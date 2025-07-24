@@ -1,0 +1,10 @@
+@Api_HostAddress = http://localhost:5071
+
+GET {{Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
+GET {{Api_HostAddress}}/pcr/
+Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+###
