@@ -2,6 +2,7 @@ using Api.Data;
 using Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,31 +17,17 @@ builder.Services.AddDbContext<CloudPcrContext>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
+
+// Enable Scalar UI for API testing
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
+    {
+        options.WithTitle("My API");
+        options.WithTheme(ScalarTheme.BluePlanet);
+    });
 
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
 
 app.MapGet("/pcr/{agencyId}", async (
     [FromServices] IPcrExportService pcrExportService,
@@ -51,7 +38,16 @@ app.MapGet("/pcr/{agencyId}", async (
     var pcrs = await pcrExportService.ExportPcrForAgencyAsync(agencyId, startDate, endDate);
     var reportName = $"PCR_Report_{agencyId}_From_{startDate:yyyyMMdd}_To_{endDate:yyyyMMdd}.xlsx";
     return Results.File(pcrs, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", reportName);
-});
+})
+.Produces<byte[]>(StatusCodes.Status200OK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+  .Produces(StatusCodes.Status404NotFound)
+  .Produces(StatusCodes.Status500InternalServerError)
+  .WithName("ExportPcrForAgency")
+  .WithTags("PCR Export")
+  .WithSummary("Export PCRs for a specific agency")
+    .WithDescription("Exports PCRs for a specific agency within a date range. " +
+                     "If no dates are provided, it defaults to the last 30 days.");
+
 
 app.Run();
 
