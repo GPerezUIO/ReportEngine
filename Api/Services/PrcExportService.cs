@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using Api.Data;
+using Api.Dtos;
 using Api.Models;
 using Microsoft.EntityFrameworkCore;
 using OfficeOpenXml;
@@ -26,19 +27,19 @@ public class PrcExportService : IPcrExportService
                 && (!endDate.HasValue || p.CreationTime <= endDate)
                 && p.IsDeleted == false
                 && p.Pcrjson != null && p.Pcrjson.JsonData != null)
-            .Select(p => new { p.Pcrjson.JsonData })
+            .Select(p => new PcrDto { PcrId = p.Id, JsonData = p.Pcrjson.JsonData })
             .AsNoTracking()
             .AsSplitQuery()
             .ToListAsync();
 
         var pcrJsonDocs = pcrs
             .Where(p => !string.IsNullOrWhiteSpace(p.JsonData))
-            .Select(p => JsonDocument.Parse(p.JsonData!))
+            .Select(p => new PcrReportDto { PcrId = p.PcrId, JsonData = JsonDocument.Parse(p.JsonData) })
             .ToList();
 
         var ddos = await GetCollection(tenantId: agencyId, includeDeleted: false);
 
-        List<JsonDocument> filteredJsonDocs = FilterJsonDocs(pcrJsonDocs);
+        List<PcrReportDto> filteredJsonDocs = FilterJsonDocs(pcrJsonDocs, DefaultAllowedProps);
 
         var newJsonDocs = ReplaceGuidsForDDOsValuesDynamic(filteredJsonDocs, ddos);
 
@@ -47,44 +48,54 @@ public class PrcExportService : IPcrExportService
         return excelBytes;
     }
 
-    private List<JsonDocument> FilterJsonDocs(List<JsonDocument> newJsonDocs)
-    {
-        // Filter to only the allowed properties
-        var allowedProps = new HashSet<string>(new[] {
-            "eNarrative_01",
-            "eResponse_05",
-            "eDisposition_17",
-            "eSituation_11",
-            "eSituation_12",
-            "eSituation_09",
-            "eSituation_10",
-            "eHistory_09",
-            "eExam_10",
-            "eDisposition_20",
-            "ePatient_07",
-            "eSituation_01",
-            "eVitals_23",
-            "eDisposition_21",
-            "eDisposition_22",
-            "eResponse_23",
-            "eTimes_03",
-            "eTimes_05",
-            "eTimes_07"
-        });
+    // Default allowed properties for filtering PCR JSON documents
+    private static readonly HashSet<string> DefaultAllowedProps = new(new[] {
+        "eResponse_03",
+        "eNarrative_01",
+        "eResponse_05",
+        "eDisposition_17",
+        "eSituation_11",
+        "eSituation_12",
+        "eSituation_09",
+        "eSituation_10",
+        "eHistory_09",
+        "eExam_10",
+        "eDisposition_20",
+        "ePatient_07",
+        "eSituation_01",
+        "eVitals_23",
+        "eDisposition_21",
+        "eDisposition_22",
+        "eResponse_23",
+        "eTimes_03",
+        "eTimes_05",
+        "eTimes_07"
+    });
 
-        var filteredJsonDocs = newJsonDocs.Select(doc =>
+
+    private List<PcrReportDto> FilterJsonDocs(List<PcrReportDto> jsonDocs, HashSet<string> allowedProps)
+    {
+        var filteredJsonDocs = jsonDocs.Select(dto =>
         {
             var filtered = new Dictionary<string, object?>();
-            foreach (var prop in doc.RootElement.EnumerateObject())
+            foreach (var prop in dto.JsonData.RootElement.EnumerateObject())
             {
                 if (allowedProps.Contains(prop.Name))
                 {
                     filtered[prop.Name] = prop.Value.ValueKind == JsonValueKind.Null ? null : JsonElementToObject(prop.Value);
                 }
             }
+            // Serialize and parse back to JsonDocument to normalize the filtered data and ensure type compatibility
             var json = JsonSerializer.Serialize(filtered);
-            return JsonDocument.Parse(json);
+            var pcrId = dto.PcrId;
+
+            return new PcrReportDto
+            {
+                PcrId = pcrId,
+                JsonData = JsonDocument.Parse(json)
+            };
         }).ToList();
+
         return filteredJsonDocs;
     }
 
@@ -123,20 +134,24 @@ public class PrcExportService : IPcrExportService
     }
 
 
-    private List<JsonDocument> ReplaceGuidsForDDOsValuesDynamic(List<JsonDocument> pcrJsonDocs, List<DropdownOption> ddos)
+    private List<PcrReportDto> ReplaceGuidsForDDOsValuesDynamic(List<PcrReportDto> pcrJsonDocs, List<DropdownOption> ddos)
     {
         var ddoDictionary = ddos
             .DistinctBy(ddo => ddo.Guid)
             .Where(ddo => ddo.Guid != null)
             .ToDictionary(ddo => ddo.Guid!, ddo => ddo.Value ?? string.Empty);
 
-        var newDocs = new List<JsonDocument>();
+        var newDocs = new List<PcrReportDto>();
         foreach (var doc in pcrJsonDocs)
         {
-            var root = doc.RootElement;
+            var root = doc.JsonData.RootElement;
             var replaced = ReplaceGuidsInJsonElement(root, ddoDictionary);
             var json = JsonSerializer.Serialize(replaced);
-            newDocs.Add(JsonDocument.Parse(json));
+            newDocs.Add(new PcrReportDto
+            {
+                PcrId = doc.PcrId,
+                JsonData = JsonDocument.Parse(json)
+            });
         }
         return newDocs;
     }
@@ -177,22 +192,23 @@ public class PrcExportService : IPcrExportService
         }
     }
 
-    private byte[] CreateExcelFromJsonDocuments(List<JsonDocument> jsonDocs)
+    private byte[] CreateExcelFromJsonDocuments(List<PcrReportDto> reports)
     {
         ExcelPackage.License.SetNonCommercialPersonal("Geraldson");
+
         using (var package = new OfficeOpenXml.ExcelPackage())
         {
             var worksheet = package.Workbook.Worksheets.Add("PCRs");
-            if (jsonDocs == null || jsonDocs.Count == 0)
+            if (reports == null || reports.Count == 0)
             {
                 return package.GetAsByteArray();
             }
 
             // Collect all unique property names from all documents (flat, top-level only)
             var allProps = new HashSet<string>();
-            foreach (var doc in jsonDocs)
+            foreach (var doc in reports)
             {
-                foreach (var prop in doc.RootElement.EnumerateObject())
+                foreach (var prop in doc.JsonData.RootElement.EnumerateObject())
                 {
                     allProps.Add(prop.Name);
                 }
@@ -206,10 +222,10 @@ public class PrcExportService : IPcrExportService
             }
 
             // Write data rows
-            for (int row = 0; row < jsonDocs.Count; row++)
+            for (int row = 0; row < reports.Count; row++)
             {
-                var doc = jsonDocs[row];
-                var root = doc.RootElement;
+                var doc = reports[row];
+                var root = doc.JsonData.RootElement;
                 for (int col = 0; col < propList.Count; col++)
                 {
                     var propName = propList[col];
