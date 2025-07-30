@@ -1,45 +1,60 @@
 using System;
 using System.Linq;
 using System.Text.Json;
-using Api.Data;
-using Api.Dtos;
-using Api.Models;
 using Microsoft.EntityFrameworkCore;
 using OfficeOpenXml;
+using Microsoft.Extensions.Options;
+using EpcrExportConsoleApp.Data;
+using EpcrExportConsoleApp.Dtos;
+using EpcrExportConsoleApp.Models;
+using EpcrExportConsoleApp.Config;
 
-namespace Api.Services;
+namespace EpcrExportConsoleApp.Services;
 
 public class PrcExportService : IPcrExportService
 {
     private readonly CloudPcrContext _context;
+    private readonly HashSet<string> _fieldsToExport;
 
-    public PrcExportService(CloudPcrContext context)
+    public PrcExportService(CloudPcrContext context, IOptions<PcrExportOptions> exportOptions)
     {
         _context = context;
+        _fieldsToExport = exportOptions.Value.FieldsToExport != null
+            ? new HashSet<string>(exportOptions.Value.FieldsToExport)
+            : new HashSet<string>();
     }
 
     public async Task<byte[]> ExportPcrForAgencyAsync(long agencyId, DateTime? startDate = null, DateTime? endDate = null)
     {
         startDate ??= DateTime.Now.AddDays(-5);
         endDate ??= DateTime.Now;
+
         var pcrs = await _context.Pcrs.Where(p => p.TenantId == agencyId)
             .Where(p => (!startDate.HasValue || p.CreationTime >= startDate)
                 && (!endDate.HasValue || p.CreationTime <= endDate)
                 && p.IsDeleted == false
-                && p.Pcrjson != null && p.Pcrjson.JsonData != null)
-            .Select(p => new PcrDto { PcrId = p.Id, JsonData = p.Pcrjson.JsonData })
+                && p.Pcrjson != null && !string.IsNullOrWhiteSpace(p.Pcrjson.JsonData))
+            .Select(p => new PcrDto { PcrId = p.Id, JsonData = p.Pcrjson.JsonData ?? string.Empty })
             .AsNoTracking()
             .AsSplitQuery()
             .ToListAsync();
 
         var pcrJsonDocs = pcrs
             .Where(p => !string.IsNullOrWhiteSpace(p.JsonData))
-            .Select(p => new PcrReportDto { PcrId = p.PcrId, JsonData = JsonDocument.Parse(p.JsonData) })
+            .Select(p => {
+                try {
+                    return new PcrReportDto { PcrId = p.PcrId, JsonData = JsonDocument.Parse(p.JsonData!) };
+                } catch {
+                    return null;
+                }
+            })
+            .Where(x => x != null)
+            .Cast<PcrReportDto>()
             .ToList();
 
         var ddos = await GetCollection(tenantId: agencyId, includeDeleted: false);
 
-        List<PcrReportDto> filteredJsonDocs = FilterJsonDocs(pcrJsonDocs, DefaultAllowedProps);
+        List<PcrReportDto> filteredJsonDocs = FilterJsonDocs(pcrJsonDocs, _fieldsToExport);
 
         var newJsonDocs = ReplaceGuidsForDDOsValuesDynamic(filteredJsonDocs, ddos);
 
@@ -48,29 +63,7 @@ public class PrcExportService : IPcrExportService
         return excelBytes;
     }
 
-    // Default allowed properties for filtering PCR JSON documents
-    private static readonly HashSet<string> DefaultAllowedProps = new(new[] {
-        "eResponse_03",
-        "eNarrative_01",
-        "eResponse_05",
-        "eDisposition_17",
-        "eSituation_11",
-        "eSituation_12",
-        "eSituation_09",
-        "eSituation_10",
-        "eHistory_09",
-        "eExam_10",
-        "eDisposition_20",
-        "ePatient_07",
-        "eSituation_01",
-        "eVitals_23",
-        "eDisposition_21",
-        "eDisposition_22",
-        "eResponse_23",
-        "eTimes_03",
-        "eTimes_05",
-        "eTimes_07"
-    });
+
 
 
     private List<PcrReportDto> FilterJsonDocs(List<PcrReportDto> jsonDocs, HashSet<string> allowedProps)
@@ -301,3 +294,4 @@ public class PrcExportService : IPcrExportService
     }
 
 }
+

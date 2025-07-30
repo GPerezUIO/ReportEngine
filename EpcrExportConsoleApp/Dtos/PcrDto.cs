@@ -1,6 +1,6 @@
 using System;
 
-namespace Api.Dtos;
+namespace EpcrExportConsoleApp.Dtos;
 
 public class PcrDto
 {

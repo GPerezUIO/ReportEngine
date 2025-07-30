@@ -1,7 +1,7 @@
 using System;
 using System.Text.Json;
 
-namespace Api.Dtos;
+namespace EpcrExportConsoleApp.Dtos;
 
 public class PcrReportDto
 {

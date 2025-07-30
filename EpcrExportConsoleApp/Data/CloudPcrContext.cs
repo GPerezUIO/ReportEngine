@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using Api.Models;
+using EpcrExportConsoleApp.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace Api.Data;
+namespace EpcrExportConsoleApp.Data;
 
 public partial class CloudPcrContext : DbContext
 {

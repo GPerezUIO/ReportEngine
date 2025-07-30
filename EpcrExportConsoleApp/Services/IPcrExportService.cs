@@ -1,6 +1,6 @@
 using System;
 
-namespace Api.Services;
+namespace EpcrExportConsoleApp.Services;
 
 public interface IPcrExportService
 {
